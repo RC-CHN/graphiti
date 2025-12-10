@@ -4,10 +4,31 @@ from typing import Annotated
 from fastapi import Depends, HTTPException
 from graphiti_core import Graphiti  # type: ignore
 from graphiti_core.edges import EntityEdge  # type: ignore
-from graphiti_core.embedder import EmbedderClient, OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.cross_encoder import (
+    BGERerankerClient,
+    CrossEncoderClient,
+    GeminiRerankerClient,
+    OpenAIRerankerClient,
+)
+from graphiti_core.embedder import (
+    EmbedderClient,
+    GeminiEmbedder,
+    GeminiEmbedderConfig,
+    OpenAIEmbedder,
+    OpenAIEmbedderConfig,
+    VoyageEmbedder,
+    VoyageEmbedderConfig,
+)
+from graphiti_core.embedder.openai_generic import OpenAIGenericEmbedder
 from graphiti_core.errors import EdgeNotFoundError, GroupsEdgesNotFoundError, NodeNotFoundError
-from graphiti_core.llm_client import LLMClient, LLMConfig
-from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+from graphiti_core.llm_client import (
+    AnthropicClient,
+    GeminiClient,
+    GroqClient,
+    LLMClient,
+    LLMConfig,
+    OpenAIGenericClient,
+)
 from graphiti_core.nodes import EntityNode, EpisodicNode  # type: ignore
 
 from graph_service.config import ZepEnvDep
@@ -24,9 +45,15 @@ class ZepGraphiti(Graphiti):
         password: str,
         llm_client: LLMClient | None = None,
         embedder: EmbedderClient | None = None,
+        cross_encoder: CrossEncoderClient | None = None,
     ):
         super().__init__(
-            uri=uri, user=user, password=password, llm_client=llm_client, embedder=embedder
+            uri=uri,
+            user=user,
+            password=password,
+            llm_client=llm_client,
+            embedder=embedder,
+            cross_encoder=cross_encoder,
         )
 
     async def save_entity_node(self, name: str, uuid: str, group_id: str, summary: str = ''):
@@ -143,20 +170,85 @@ class ZepGraphiti(Graphiti):
             raise HTTPException(status_code=404, detail=e.message) from e
 
 
-async def get_graphiti(settings: ZepEnvDep):
+def _get_llm_client(settings: ZepEnvDep) -> LLMClient:
     llm_config = LLMConfig(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         model=settings.model_name,
     )
-    llm_client = OpenAIGenericClient(config=llm_config)
 
-    embedder_config = OpenAIEmbedderConfig(
-        api_key=settings.embedding_api_key or settings.openai_api_key,
-        base_url=settings.embedding_base_url or settings.openai_base_url,
-        embedding_model=settings.embedding_model_name or 'text-embedding-3-small',
-    )
-    embedder = OpenAIEmbedder(config=embedder_config)
+    if settings.llm_provider == 'openai':
+        return OpenAIGenericClient(config=llm_config)
+    elif settings.llm_provider == 'anthropic':
+        return AnthropicClient(config=llm_config)
+    elif settings.llm_provider == 'gemini':
+        return GeminiClient(config=llm_config)
+    elif settings.llm_provider == 'groq':
+        return GroqClient(config=llm_config)
+    else:
+        # Default to OpenAI Generic if unknown, or raise error
+        return OpenAIGenericClient(config=llm_config)
+
+
+def _get_embedder(settings: ZepEnvDep) -> EmbedderClient:
+    if settings.embedding_provider == 'openai':
+        embedder_config = OpenAIEmbedderConfig(
+            api_key=settings.embedding_api_key or settings.openai_api_key,
+            base_url=settings.embedding_base_url or settings.openai_base_url,
+            embedding_model=settings.embedding_model_name or 'text-embedding-3-small',
+        )
+        return OpenAIEmbedder(config=embedder_config)
+    elif settings.embedding_provider == 'openai_generic':
+        embedder_config = OpenAIEmbedderConfig(
+            api_key=settings.embedding_api_key or settings.openai_api_key,
+            base_url=settings.embedding_base_url or settings.openai_base_url,
+            embedding_model=settings.embedding_model_name or 'text-embedding-3-small',
+        )
+        return OpenAIGenericEmbedder(config=embedder_config)
+    elif settings.embedding_provider == 'gemini':
+        embedder_config = GeminiEmbedderConfig(
+            api_key=settings.embedding_api_key,
+            embedding_model=settings.embedding_model_name or 'models/text-embedding-004',
+        )
+        return GeminiEmbedder(config=embedder_config)
+    elif settings.embedding_provider == 'voyage':
+        embedder_config = VoyageEmbedderConfig(
+            api_key=settings.embedding_api_key,
+            embedding_model=settings.embedding_model_name or 'voyage-3',
+        )
+        return VoyageEmbedder(config=embedder_config)
+    else:
+        raise ValueError(f'Unsupported embedding provider: {settings.embedding_provider}')
+
+
+def _get_reranker(settings: ZepEnvDep) -> CrossEncoderClient | None:
+    if not settings.reranker_provider:
+        return None
+
+    if settings.reranker_provider == 'openai':
+        llm_config = LLMConfig(
+            api_key=settings.reranker_api_key or settings.openai_api_key,
+            base_url=settings.reranker_base_url or settings.openai_base_url,
+            model=settings.reranker_model_name or 'gpt-4o-mini',
+        )
+        return OpenAIRerankerClient(config=llm_config)
+    elif settings.reranker_provider == 'gemini':
+        llm_config = LLMConfig(
+            api_key=settings.reranker_api_key or settings.openai_api_key,
+            model=settings.reranker_model_name or 'gemini-2.5-flash-lite',
+        )
+        return GeminiRerankerClient(config=llm_config)
+    elif settings.reranker_provider == 'bge':
+        return BGERerankerClient()
+    else:
+        # Fallback or raise error
+        return None
+
+
+async def get_graphiti(settings: ZepEnvDep):
+    llm_client = _get_llm_client(settings)
+    embedder = _get_embedder(settings)
+    reranker = _get_reranker(settings)
 
     client = ZepGraphiti(
         uri=settings.neo4j_uri,
@@ -164,6 +256,7 @@ async def get_graphiti(settings: ZepEnvDep):
         password=settings.neo4j_password,
         llm_client=llm_client,
         embedder=embedder,
+        cross_encoder=reranker,
     )
 
     try:
@@ -173,19 +266,9 @@ async def get_graphiti(settings: ZepEnvDep):
 
 
 async def initialize_graphiti(settings: ZepEnvDep):
-    llm_config = LLMConfig(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        model=settings.model_name,
-    )
-    llm_client = OpenAIGenericClient(config=llm_config)
-
-    embedder_config = OpenAIEmbedderConfig(
-        api_key=settings.embedding_api_key or settings.openai_api_key,
-        base_url=settings.embedding_base_url or settings.openai_base_url,
-        embedding_model=settings.embedding_model_name or 'text-embedding-3-small',
-    )
-    embedder = OpenAIEmbedder(config=embedder_config)
+    llm_client = _get_llm_client(settings)
+    embedder = _get_embedder(settings)
+    reranker = _get_reranker(settings)
 
     client = ZepGraphiti(
         uri=settings.neo4j_uri,
@@ -193,6 +276,7 @@ async def initialize_graphiti(settings: ZepEnvDep):
         password=settings.neo4j_password,
         llm_client=llm_client,
         embedder=embedder,
+        cross_encoder=reranker,
     )
     await client.build_indices_and_constraints()
 

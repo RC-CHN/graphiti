@@ -23,7 +23,7 @@ from .openai import OpenAIEmbedderConfig
 class OpenAIGenericEmbedder(EmbedderClient):
     """
     OpenAI Generic Embedder Client
-    
+
     This client is designed to work with any OpenAI-compatible embedding service.
     """
 
@@ -41,13 +41,11 @@ class OpenAIGenericEmbedder(EmbedderClient):
         else:
             self.client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url)
 
-    async def create(
-        self, input_data: str | list[str]
-    ) -> list[float]:
+    async def create(self, input_data: str | list[str]) -> list[float]:
         # Ensure input is a list for the API
         if isinstance(input_data, str):
             input_data = [input_data]
-            
+
         result = await self.client.embeddings.create(
             input=input_data, model=self.config.embedding_model
         )
