@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.9
 FROM harbor.rcfortress.site/dockerhub/library/python:3.12-slim
 
 # Inherit build arguments for labels
