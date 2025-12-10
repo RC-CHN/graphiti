@@ -9,7 +9,7 @@ from graphiti_core.llm_client import LLMClient  # type: ignore
 from graphiti_core.nodes import EntityNode, EpisodicNode  # type: ignore
 
 from graph_service.config import ZepEnvDep
-from graph_service.dto import FactResult
+from graph_service.dto import EntityEdgeResult, EntityNodeResult, FactResult
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,67 @@ class ZepGraphiti(Graphiti):
         await new_node.generate_name_embedding(self.embedder)
         await new_node.save(self.driver)
         return new_node
+
+    async def get_entity_node(self, uuid: str):
+        try:
+            node = await EntityNode.get_by_uuid(self.driver, uuid)
+            return node
+        except NodeNotFoundError as e:
+            raise HTTPException(status_code=404, detail=e.message) from e
+
+    async def search_entity_nodes(
+        self, query: str | None, group_ids: list[str] | None, limit: int = 10
+    ):
+        if query:
+            # Simple fuzzy search using Cypher
+            # Note: This is a basic implementation. For production, consider full-text indexes.
+            cypher_query = """
+            MATCH (n:Entity)
+            WHERE ($group_ids IS NULL OR n.group_id IN $group_ids)
+              AND toLower(n.name) CONTAINS toLower($query)
+            RETURN n.uuid AS uuid
+            LIMIT $limit
+            """
+            records, _, _ = await self.driver.execute_query(
+                cypher_query, query=query, group_ids=group_ids, limit=limit
+            )
+            uuids = [record['uuid'] for record in records]
+            if not uuids:
+                return []
+            return await EntityNode.get_by_uuids(self.driver, uuids)
+        elif group_ids:
+            return await EntityNode.get_by_group_ids(self.driver, group_ids, limit=limit)
+        else:
+            # If no query and no group_ids, return empty or default behavior?
+            # Let's require at least one filter or return empty to avoid dumping the whole DB
+            return []
+
+    async def update_entity_node(
+        self,
+        uuid: str,
+        name: str | None = None,
+        summary: str | None = None,
+        labels: list[str] | None = None,
+        attributes: dict | None = None,
+    ):
+        node = await self.get_entity_node(uuid)
+
+        if name is not None:
+            node.name = name
+            # Regenerate embedding if name changes
+            await node.generate_name_embedding(self.embedder)
+
+        if summary is not None:
+            node.summary = summary
+
+        if labels is not None:
+            node.labels = labels
+
+        if attributes is not None:
+            node.attributes = attributes
+
+        await node.save(self.driver)
+        return node
 
     async def get_entity_edge(self, uuid: str):
         try:
@@ -108,6 +169,34 @@ def get_fact_result_from_edge(edge: EntityEdge):
         invalid_at=edge.invalid_at,
         created_at=edge.created_at,
         expired_at=edge.expired_at,
+    )
+
+
+def get_entity_node_result_from_node(node: EntityNode):
+    return EntityNodeResult(
+        uuid=node.uuid,
+        name=node.name,
+        summary=node.summary,
+        group_id=node.group_id,
+        created_at=node.created_at,
+        labels=node.labels,
+        attributes=node.attributes,
+    )
+
+
+def get_entity_edge_result_from_edge(edge: EntityEdge):
+    return EntityEdgeResult(
+        uuid=edge.uuid,
+        source_node_uuid=edge.source_node_uuid,
+        target_node_uuid=edge.target_node_uuid,
+        name=edge.name,
+        fact=edge.fact,
+        group_id=edge.group_id,
+        created_at=edge.created_at,
+        valid_at=edge.valid_at,
+        invalid_at=edge.invalid_at,
+        expired_at=edge.expired_at,
+        attributes=edge.attributes,
     )
 
 

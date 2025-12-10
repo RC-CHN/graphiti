@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.9
-FROM python:3.12-slim
+FROM harbor.rcfortress.site/dockerhub/library/python:3.12-slim
 
 # Inherit build arguments for labels
 ARG GRAPHITI_VERSION
@@ -37,27 +37,29 @@ RUN groupadd -r app && useradd -r -d /app -g app app
 
 # Set up the server application first
 WORKDIR /app
-COPY ./server/pyproject.toml ./server/README.md ./server/uv.lock ./
+
+# Copy graphiti-core first
+COPY ./graphiti_core ./graphiti_core
+COPY ./pyproject.toml ./README.md ./uv.lock ./
+
+# Copy server files
+COPY ./server/pyproject.toml ./server/README.md ./server/uv.lock ./server/
 COPY ./server/graph_service ./graph_service
 
-# Install server dependencies (without graphiti-core from lockfile)
-# Then install graphiti-core from PyPI at the desired version
-# This prevents the stale lockfile from pinning an old graphiti-core version
+# Install dependencies
+# We install graphiti-core from the local directory
 ARG INSTALL_FALKORDB=false
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev && \
-    if [ -n "$GRAPHITI_VERSION" ]; then \
-        if [ "$INSTALL_FALKORDB" = "true" ]; then \
-            uv pip install --system --upgrade "graphiti-core[falkordb]==$GRAPHITI_VERSION"; \
-        else \
-            uv pip install --system --upgrade "graphiti-core==$GRAPHITI_VERSION"; \
-        fi; \
+    # Install graphiti-core dependencies first
+    uv pip install --system -e . && \
+    # Install server dependencies
+    cd server && \
+    uv pip install --system -r pyproject.toml && \
+    # Install graphiti-core with optional dependencies if needed
+    if [ "$INSTALL_FALKORDB" = "true" ]; then \
+        uv pip install --system -e ".[falkordb]"; \
     else \
-        if [ "$INSTALL_FALKORDB" = "true" ]; then \
-            uv pip install --system --upgrade "graphiti-core[falkordb]"; \
-        else \
-            uv pip install --system --upgrade graphiti-core; \
-        fi; \
+        uv pip install --system -e .; \
     fi
 
 # Change ownership to app user

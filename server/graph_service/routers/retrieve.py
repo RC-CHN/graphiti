@@ -2,14 +2,26 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, status
 
+from graphiti_core.search.search_config import SearchConfig
+from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_CROSS_ENCODER
+
 from graph_service.dto import (
+    AdvancedSearchQuery,
+    AdvancedSearchResults,
+    EntityEdgeResult,
+    EntityNodeResult,
     GetMemoryRequest,
     GetMemoryResponse,
     Message,
     SearchQuery,
     SearchResults,
 )
-from graph_service.zep_graphiti import ZepGraphitiDep, get_fact_result_from_edge
+from graph_service.zep_graphiti import (
+    ZepGraphitiDep,
+    get_entity_edge_result_from_edge,
+    get_entity_node_result_from_node,
+    get_fact_result_from_edge,
+)
 
 router = APIRouter()
 
@@ -24,6 +36,24 @@ async def search(query: SearchQuery, graphiti: ZepGraphitiDep):
     facts = [get_fact_result_from_edge(edge) for edge in relevant_edges]
     return SearchResults(
         facts=facts,
+    )
+
+
+@router.post('/search/advanced', status_code=status.HTTP_200_OK)
+async def advanced_search(query: AdvancedSearchQuery, graphiti: ZepGraphitiDep):
+    config = COMBINED_HYBRID_SEARCH_CROSS_ENCODER
+    config.limit = query.limit
+
+    results = await graphiti.search_(
+        query=query.query,
+        group_ids=query.group_ids,
+        center_node_uuid=query.center_node_uuid,
+        config=config,
+    )
+
+    return AdvancedSearchResults(
+        edges=[get_entity_edge_result_from_edge(edge) for edge in results.edges],
+        nodes=[get_entity_node_result_from_node(node) for node in results.nodes],
     )
 
 

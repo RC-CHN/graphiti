@@ -1,0 +1,40 @@
+services:
+  graph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server/graph_service:/app/graph_service
+      - ./graphiti_core:/app/graphiti_core
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NEO4J_URI=bolt://neo4j:${NEO4J_PORT:-7687}
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - PORT=8000
+      - db_backend=neo4j
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    command: uv run uvicorn graph_service.main:app --host 0.0.0.0 --port 8000 --reload
+
+  neo4j:
+    image: harbor.rcfortress.site/dockerhub/library/neo4j:5.26.2
+    ports:
+      - "7474:7474" # HTTP
+      - "${NEO4J_PORT:-7687}:${NEO4J_PORT:-7687}" # Bolt
+    volumes:
+      - neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+
+volumes:
+  neo4j_data:
